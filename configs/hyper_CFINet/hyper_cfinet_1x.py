@@ -1,6 +1,5 @@
 _base_ = [
     '../_base_/models/faster_rcnn_r50_fpn.py',
-    '../_base_/datasets/sodad.py',
     '../_base_/schedules/schedule_1x.py', '../_base_/default_runtime.py'
 ]
 
@@ -8,6 +7,17 @@ find_unused_parameters=True
 rpn_weight = 0.9
 model = dict(
     type='FasterRCNN',
+    backbone=dict( # overwrite the backbone defined in _base_
+        type='ResNet',
+        depth=50,
+        in_channels=172, # customize the input channel to adapt for Hyperspectral images
+        num_stages=4,
+        out_indices=(0, 1, 2, 3),
+        frozen_stages=1,
+        norm_cfg=dict(type='BN', requires_grad=True),
+        norm_eval=True,
+        style='pytorch',
+        ),
     neck=dict(
         type='FPN',
         in_channels=[256, 512, 1024, 2048],
@@ -63,6 +73,7 @@ model = dict(
     roi_head=dict(
         type='FIRoIHead',
         num_gpus=1,
+        num_classes=2,
         temperature=0.6,
         contrast_loss_weights=0.50,
         num_con_queue=256,
@@ -85,7 +96,7 @@ model = dict(
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=9,
+            num_classes=2,
             bbox_coder=dict(
                 type='DeltaXYWHBBoxCoder',
                 target_means=[0., 0., 0., 0.],
@@ -162,3 +173,59 @@ log_config = dict(
         dict(type='TensorboardLoggerHook')
     ]
 )
+
+dataset_type = 'HyperForensicsDataset'
+data_root = '/ssddd/TzuYu/HyperForensics++/data/ADMM-ADAM/config0/'
+img_norm_cfg = dict(
+    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
+
+train_pipeline = [
+    dict(type='LoadNumpyFromFile'),
+    dict(type='LoadAnnotations', with_bbox=True),
+    dict(type='Resize', img_scale=(1200, 1200), keep_ratio=True),
+    dict(type='RandomFlip', flip_ratio=0.5),
+    dict(type='Normalize', **img_norm_cfg),
+    dict(type='Pad', size_divisor=32),
+    dict(type='DefaultFormatBundle'),
+    dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels']),
+]
+test_pipeline = [
+    dict(type='LoadNumpyFromFile'),
+    dict(
+        type='MultiScaleFlipAug',
+        img_scale=(1200, 1200),
+        flip=False,
+        transforms=[
+            dict(type='Resize', keep_ratio=True),
+            dict(type='RandomFlip'),
+            dict(type='Normalize', **img_norm_cfg),
+            dict(type='Pad', size_divisor=32),
+            dict(type='DefaultFormatBundle'),
+            dict(type='Collect', keys=['img']),
+        ])
+]
+
+data = dict(
+    samples_per_gpu=2,
+    workers_per_gpu=2,
+    train=dict(
+        type=dataset_type,
+        ann_file=data_root + 'coco_meta/train.jsonl',
+        img_prefix=data_root + '',
+        pipeline=train_pipeline,
+        ori_ann_file=data_root + 'coco_meta/train.jsonl'
+    ),
+    val=dict(
+        type=dataset_type,
+        ann_file=data_root + 'coco_meta/validate.jsonl',
+        img_prefix=data_root + '',
+        pipeline=test_pipeline,
+        ori_ann_file=data_root + 'coco_meta/validate.jsonl'
+    ),
+    test=dict(
+        type=dataset_type,
+        ann_file=data_root + 'coco_meta/test.jsonl',
+        img_prefix=data_root + '',
+        pipeline=test_pipeline,
+        ori_ann_file=data_root + 'coco_meta/test.jsonl'
+    ))

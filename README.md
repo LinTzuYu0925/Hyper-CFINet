@@ -10,6 +10,20 @@ This is the official implementation of our paper titled "Small Object Detection 
  - TorchVision 0.11.0
  - mmcv-full 1.5.0
  - numpy 1.22.4
+```bash
+conda create -n {Name} python=3.8
+conda activate {Name}
+```
+```bash
+# Download runtime CUDA from channel nvidia
+conda install cudatoolkit=11.3 -c nvidia
+# Install PyTorch and TorchVision
+pip install torch==1.10.0+cu113 torchvision==0.11.0+cu113 --index-url https://download.pytorch.org/whl/cu113
+# Install openmim to configer version for mmcv
+pip install -U openmim
+# Install mmcv-full (rather than mmcv since it is a older version)
+mim install mmcv-full==1.5.0 -f https://download.openmmlab.com/mmcv-full/dist/cu113/torch1.10.0/index.html # make sure match the cuda(cu113) and PyTorch(torch1.10.0)
+```
 
 ## :open_file_folder: Datasets
 Our work is based on the large-scale small object detection benchmark **SODA**, which comprises two sub datasets **SODA-D** and **SODA-A**. Download the dataset(s) from corresponding links below.
