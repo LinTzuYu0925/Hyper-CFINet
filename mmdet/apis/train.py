@@ -147,7 +147,23 @@ def train_detector(model,
     }
 
     data_loaders = [build_dataloader(ds, **train_loader_cfg) for ds in dataset]
-
+    # data_loaders[batch_idx]: dict(['img_metas', 'img', 'gt_bboxes', 'gt_labels'])
+    #   data_loaders[batch_idx]['img_metas'].data: list(4 x dict{
+    #       'filename',
+    #       'ori_filename',
+    #       'ori_shape': (256, 256, 172),
+    #       'img_shape': (1200, 1200, 172),
+    #       'pad_shape': (1216, 1216, 172),
+    #       'scale_factor': array([4.6875, 4.6875, 4.6875, 4.6875], dtype=float32),
+    #       'flip': True,
+    #       'flip_direction': 'horizontal',
+    #       'img_norm_cfg': {'mean','std'}
+    #       'to_rgb': False}
+    #   }]
+    #   data_loaders[batch_idx]['img'].data: torch.Size([4, 172, 1216, 1216])
+    #   data_loaders[batch_idx]['gt_bboxes'].data: list of [4 x tensor(1, 4)]
+    #   data_loaders[batch_idx]['gt_labels'].data: list of [4 x tensor(1, 4)]
+    #check(data_loaders)
     # put model on gpus
     if distributed:
         find_unused_parameters = cfg.get('find_unused_parameters', False)
@@ -160,7 +176,7 @@ def train_detector(model,
             broadcast_buffers=False,
             find_unused_parameters=find_unused_parameters)
     else:
-        model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
+        model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids) # cfg.gpu_ids = [--gpu_id]
 
     # build optimizer
     auto_scale_lr(cfg, distributed, logger)
@@ -244,3 +260,68 @@ def train_detector(model,
     elif cfg.load_from:
         runner.load_checkpoint(cfg.load_from)
     runner.run(data_loaders, cfg.workflow)
+
+import json
+from PIL import Image
+import cv2
+def find_bbox_for_file(filename: str) -> tuple:
+    with open("/ssd2/TzuYu/metadata.jsonl", "r", encoding="utf-8") as f:
+        meta_data = [json.loads(line) for line in f]
+    for entry in meta_data:
+    # If your metadata uses the base name without extension:
+        if entry.get("file_prefix") == os.path.splitext(filename)[0]:
+            bbox = entry.get("bbox")
+            bbox[1] = 255 if bbox[1] < bbox[0] else bbox[1]
+            bbox[3] = 255 if bbox[3] < bbox[2] else bbox[3]
+            return tuple(bbox)
+
+def to_uint8(channel):
+    c_min, c_max = channel.min(), channel.max()
+    scaled = (channel - c_min) / (c_max - c_min)  # [0,1]
+    return (255 * scaled).astype(np.uint8)
+def false_color_image(hsi: np.ndarray, nir_band=5, red_band=15, green_band=25) -> Image:
+    blue  = hsi[:, :, nir_band]
+    green = hsi[:, :, red_band]
+    red   = hsi[:, :, green_band]
+    rgb8 = np.dstack([to_uint8(red), to_uint8(green), to_uint8(blue)])
+
+    return rgb8
+def draw_bounding_box(image: np.ndarray, bbox: tuple, color: tuple=tuple([255, 255, 0])) -> np.ndarray:
+    # Draw a rectangle on the image using the bounding box coordinates
+    if bbox is not None:
+        #print(bbox)
+        x1, y1, x2, y2 = bbox[0:4]
+        cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), color, 1)
+    return image
+from mmcv import imshow_bboxes, tensor2imgs
+def check(data_loaders):
+    with open('out.log', 'w') as f:
+        print(f"Prinitng data_loaders {len(data_loaders[0])}")
+        for batch_inputs in data_loaders[0]:
+            img_metas = batch_inputs['img_metas'].data[0]
+            gt_bboxes = batch_inputs['gt_bboxes'].data[0]
+            img = batch_inputs['img'].data[0]
+            #print(f"Batch Inputs['img']: {batch_inputs['img'].data[0].shape}")
+            # print(f"Batch Inputs['gt_bboxes']: {gt_bboxes}\n")
+            for idx in [0, 1, 2, 3]:
+                meta_bbox = find_bbox_for_file(img_metas[idx]['ori_filename'].replace('_inpaint_result(0)', ''))[0:4]
+                meta_bbox = [meta_bbox[2], meta_bbox[0], meta_bbox[3], meta_bbox[1]]
+                if img_metas[idx]['flip']:
+                    meta_bbox = [255 - meta_bbox[2], meta_bbox[1], 255 - meta_bbox[0], meta_bbox[3]]
+                meta_bbox = [x * 4.6875 for x in meta_bbox ]
+
+                f.write(
+                    f"{img_metas[idx]['ori_filename']}:\n"
+                    f"\timg_max[{img[idx].max()}], img_min[{img[idx].min()}], img_mean[{img[idx].mean()}]\n"
+                    f"\tflip: {img_metas[idx]['flip']}, flip_direction: {img_metas[idx]['flip_direction']}\n"
+                    f"\tgt_bbox({gt_bboxes[idx]}),\n"
+                    f"\tmeta_bbox      ({meta_bbox})\n"
+                )
+
+                img_input = np.array(img[idx]).transpose(1, 2, 0)
+                false_img = false_color_image(np.array(img_input))
+                false_img = imshow_bboxes(false_img, np.array(gt_bboxes[idx]), show=False, colors='red')
+                imshow_bboxes(false_img, np.array([meta_bbox]), colors='blue', show=False, 
+                             out_file=f'./img_log/{img_metas[idx]["ori_filename"]}.png')
+        print("end printing dataloaders")
+    exit(0)

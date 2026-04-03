@@ -118,8 +118,7 @@ class HyperForensicsEval:
         else:
             gts = self.cocoGt.loadAnns(self.cocoGt.getAnnIds(imgIds=p.imgIds))
             dts = self.cocoDt.loadAnns(self.cocoDt.getAnnIds(imgIds=p.imgIds))
-
-        # convert ground truth to mask if iouType == 'segm'
+        # convert ground truth to mask if iouType`` == 'segm'
         if p.iouType == 'segm':
             _toMask(gts, self.cocoGt)
             _toMask(dts, self.cocoDt)
@@ -134,8 +133,7 @@ class HyperForensicsEval:
             self._gts[gt['image_id'], gt['category_id']].append(gt)
         for dt in dts:
             self._dts[dt['image_id'], dt['category_id']].append(dt)
-        self.evalImgs = defaultdict(
-            list)  # per-image per-category evaluation results
+        self.evalImgs = defaultdict(list)  # per-image per-category evaluation results
         self.eval = {}  # accumulated evaluation results
 
     def evaluate(self):
@@ -182,7 +180,6 @@ class HyperForensicsEval:
 
     def computeIoU(self, imgId, catId):
         p = self.params
-        #print(f'Computing {self._gts} with length {len(self._gts)}')
         if p.useCats:
             gt = self._gts[imgId, catId]
             dt = self._dts[imgId, catId]
@@ -201,7 +198,8 @@ class HyperForensicsEval:
             g = [g['segmentation'] for g in gt]
             d = [d['segmentation'] for d in dt]
         elif p.iouType == 'bbox':
-            g = [g['bbox'] for g in gt]
+            # Converting [x1, x2, y1, y2] → [y1, x1, y2-y1, x2-x1] → [x, y, w, h] in COCO conventiong = [list(g['bbox'][0:4]) for g in gt]
+            g = [[g['bbox'][2], g['bbox'][0], g['bbox'][3]-g['bbox'][2], g['bbox'][1]-g['bbox'][0]] for g in gt]
             d = [d['bbox'] for d in dt]
         else:
             raise Exception('unknown iouType for iou computation')
@@ -526,9 +524,9 @@ class HyperForensicsEval:
                                   iouThr=.75,
                                   areaRng='Small',
                                   maxDets=self.params.maxDets[0])
-            stats[3] = _summarize(1,
-                                  areaRng='eS',
-                                  maxDets=self.params.maxDets[0])
+            #stats[3] = _summarize(1,
+            #                      areaRng='eS',
+            #                      maxDets=self.params.maxDets[0])
             stats[4] = _summarize(1,
                                   areaRng='rS',
                                   maxDets=self.params.maxDets[0])
@@ -549,9 +547,9 @@ class HyperForensicsEval:
             stats[9] = _summarize(0,
                                   areaRng='Small',
                                   maxDets=self.params.maxDets[2])
-            stats[10] = _summarize(0,
-                                   areaRng='eS',
-                                   maxDets=self.params.maxDets[2])
+            #stats[10] = _summarize(0,
+            #                       areaRng='eS',
+            #                       maxDets=self.params.maxDets[2])
             stats[11] = _summarize(0,
                                    areaRng='rS',
                                    maxDets=self.params.maxDets[2])
@@ -607,10 +605,11 @@ class SODADParams:
                                    int(np.round((1.00 - .0) / .01)) + 1,
                                    endpoint=True)
         # SODADO: ensure
+        # In HF++ {'Small': 211, 'eS': 0, 'rS': 51, 'gS': 160, 'Normal': 26}
         self.maxDets = [100, 300, 1000]
-        self.areaRng = [[0 ** 2, 32 ** 2], [0 ** 2, 12 ** 2], [12 ** 2, 20 ** 2],
+        self.areaRng = [[0 ** 2, 32 ** 2], [0 ** 2, 20 ** 2],
                         [20 ** 2, 32 ** 2], [32 ** 2, 40 * 50]]
-        self.areaRngLbl = ['Small', 'eS', 'rS', 'gS', 'Normal']
+        self.areaRngLbl = ['Small', 'rS', 'gS', 'Normal']
         self.useCats = 1
 
     def setKpParams(self):
@@ -650,7 +649,7 @@ class SODADParams:
 @DATASETS.register_module()
 class HyperForensicsDataset(CustomDataset):
     CLASSES = ('forged', )  # only foreground categories available
-
+    PALETTE = [(220, 20, 60)]
     def __init__(self,
                  ann_file,
                  **kwargs):
@@ -766,15 +765,17 @@ class HyperForensicsDataset(CustomDataset):
             if ann.get('ignore', False):
                 continue
             x1, x2, y1, y2, z1, z2 = ann['bbox']
-            inter_w = max(0, x2 - x1)
-            inter_h = max(0, y2 - y1)
+            inter_h = max(0, x2 - x1)
+            inter_w = max(0, y2 - y1)
             if inter_w * inter_h == 0:
                 continue
             if ann['area'] <= 0 or inter_w < 1 or inter_h < 1:
                 continue
             if ann['category_id'] not in self.cat_ids:
                 continue
-            bbox = [x1, y1, x2, y2]
+            # Convert from (x1, x2=vertical, y1, y2=horizontal) to MMDetection format (x=horizontal, y=vertical)
+            # MMDetection expects [x_min, y_min, x_max, y_max] where x=width, y=height
+            bbox = [y1, x1, y2, x2]  # Swap: y1,y2 (horizontal) -> x, x1,x2 (vertical) -> y
             if ann.get('iscrowd', False):
                 gt_bboxes_ignore.append(bbox)
             else:
@@ -948,8 +949,10 @@ class HyperForensicsDataset(CustomDataset):
             for ann in ann_info:
                 if ann.get('ignore', False) or ann['iscrowd']:
                     continue
-                x1, y1, w, h = ann['bbox']
-                bboxes.append([x1, y1, x1 + w, y1 + h])
+                # Handle custom format: [x1, x2, y1, y2, z1, z2] where x=vertical, y=horizontal
+                x1, x2, y1, y2, z1, z2 = ann['bbox']
+                # Convert to MMDetection format: [x_min, y_min, x_max, y_max] where x=horizontal, y=vertical
+                bboxes.append([y1, x1, y2, x2])  # Swap coordinates
             bboxes = np.array(bboxes, dtype=np.float32)
             if bboxes.shape[0] == 0:
                 bboxes = np.zeros((0, 4))
@@ -1248,7 +1251,7 @@ class HyperForensicsDataset(CustomDataset):
                         'AP', 'AP_50', 'AP_75', 'AP_eS',
                         'AP_rS', 'AP_gS', 'AP_Normal'
                     ]
-
+                print(f'metric_items={metric_items}')
                 for metric_item in metric_items:
                     key = f'{metric}_{metric_item}'
                     val = float(

@@ -49,7 +49,7 @@ def single_gpu_test(model,
                     out_file = osp.join(out_dir, img_meta['ori_filename'])
                 else:
                     out_file = None
-
+                print(f"img_show shape: {img_show.shape}")
                 model.module.show_result(
                     img_show,
                     result[i],

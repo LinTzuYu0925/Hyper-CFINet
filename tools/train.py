@@ -110,6 +110,15 @@ def main():
 
     cfg = Config.fromfile(args.config)
 
+    # If running single-process (non-distributed) and a specific GPU
+    # was requested, set the current CUDA device so bare `.cuda()` calls
+    # and other CUDA defaults use the chosen GPU.
+    if args.launcher == 'none' and torch.cuda.is_available():
+        try:
+            torch.cuda.set_device(args.gpu_id)
+        except Exception:
+            pass
+
     # replace the ${key} with the value of cfg.key
     cfg = replace_cfg_vals(cfg)
 
@@ -144,9 +153,10 @@ def main():
         cfg.work_dir = args.work_dir
     elif cfg.get('work_dir', None) is None:
         # use config filename as default work_dir if cfg.work_dir is None
+        timestamp = time.strftime('%Y%m%d_%H%M', time.localtime())
         cfg.work_dir = osp.join('./work_dirs',
-                                osp.splitext(osp.basename(args.config))[0])
-
+                                osp.splitext(osp.basename(args.config))[0],
+                                timestamp)
     if args.resume_from is not None:
         cfg.resume_from = args.resume_from
     cfg.auto_resume = args.auto_resume

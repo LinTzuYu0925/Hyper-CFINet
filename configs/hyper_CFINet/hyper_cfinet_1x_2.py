@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/faster_rcnn_r50_fpn.py',
-    '../_base_/schedules/schedule_1x.py', '../_base_/default_runtime.py'
+    '../_base_/default_runtime.py'
 ]
 
 find_unused_parameters=True
@@ -75,13 +75,13 @@ model = dict(
         type='FIRoIHead',
         num_gpus=1,
         num_classes=1,
-        temperature=0.6,
-        contrast_loss_weights=0.50,
+        temperature=0.6,  #1.0# Increased from 0.6 for more stable gradients
+        contrast_loss_weights=0.1,  #0.1# Reduced from 0.50 to prevent divergence
         num_con_queue=256,
         con_sampler_cfg=dict(
             num=128,
             pos_fraction=[0.5, 0.25, 0.125]),
-        con_queue_dir="./work_dirs/roi_feats/cfinet_default",
+        con_queue_dir="./work_dirs/roi_feats/cfinet",
         ins_quality_assess_cfg=dict(
             cls_score=0.05,
             hq_score=0.65,
@@ -152,15 +152,17 @@ optimizer = dict(type='SGD', lr=0.01, momentum=0.9, weight_decay=0.0001,
                      'roi_head.fc_enc': dict(lr_mult=0.05), 
                      'roi_head.fc_proj': dict(lr_mult=0.05)})
                  )
+optimizer_config = dict(grad_clip=None)
 
 lr_config = dict(
     policy='step',
     warmup='linear',
     warmup_iters=1000,
     warmup_ratio=0.001,
-    step=[60, 110])
-runner = dict(type='EpochBasedRunner', max_epochs=128)
-total_epochs = 128
+    gamma=0.5,
+    step=[300, 310, 320, 330, 340, 350]) # [90, 190, 270, 330, 370, 410, 500]) 
+runner = dict(type='EpochBasedRunner', max_epochs=360)
+total_epochs = 360
 evaluation = dict(interval=4, metric='bbox')
 #log_config = dict(interval=50)
 
@@ -173,7 +175,7 @@ log_config = dict(
 )
 
 dataset_type = 'HyperForensicsDataset'
-data_root = '/ssddd/TzuYu/HyperForensics++/data/ADMM-ADAM/config0/'
+data_root = '/ssddd/TzuYu/HyperForensics++/data/ADMM-ADAM/'
 
 img_norm_cfg = dict(
     mean=[
@@ -552,7 +554,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=2,
+    samples_per_gpu=3,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,

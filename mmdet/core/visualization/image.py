@@ -204,7 +204,7 @@ def draw_masks(ax, img, masks, color=None, with_edge=True, alpha=0.8):
 
     return ax, img
 
-
+from os.path import basename
 def imshow_det_bboxes(img,
                       bboxes=None,
                       labels=None,

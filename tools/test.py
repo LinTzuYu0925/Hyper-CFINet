@@ -236,7 +236,6 @@ def main():
         model.CLASSES = checkpoint['meta']['CLASSES']
     else:
         model.CLASSES = dataset.CLASSES
-
     if not distributed:
         model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
         outputs = single_gpu_test(model, data_loader, args.show, args.show_dir,
@@ -257,7 +256,7 @@ def main():
         outputs = multi_gpu_test(
             model, data_loader, args.tmpdir, args.gpu_collect
             or cfg.evaluation.get('gpu_collect', False))
-
+    
     rank, _ = get_dist_info()
     if rank == 0:
         if args.out:

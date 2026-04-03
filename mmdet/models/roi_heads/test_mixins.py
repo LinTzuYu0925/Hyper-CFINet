@@ -73,7 +73,7 @@ class BBoxTestMixin:
                 The length of both lists should be equal to batch_size.
         """
 
-        rois = bbox2roi(proposals)
+        rois = bbox2roi(proposals) # This is correctly output ROIS from the RPN
 
         if rois.shape[0] == 0:
             batch_size = len(proposals)

@@ -1,11 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
 
+import cv2
 import torch
+import numpy as np
+from mmcv.image import tensor2imgs, imwrite
 
 from ..builder import DETECTORS, build_backbone, build_head, build_neck
 from .base import BaseDetector
 
+from mmcv import imshow_bboxes
+from glob import glob
 
 @DETECTORS.register_module()
 class TwoStageDetector(BaseDetector):
@@ -51,6 +56,7 @@ class TwoStageDetector(BaseDetector):
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
+        self.debug_imgs = []
 
     @property
     def with_rpn(self):
@@ -74,6 +80,7 @@ class TwoStageDetector(BaseDetector):
 
         See `mmdetection/tools/analysis_tools/get_flops.py`
         """
+        #print("TWO STAGE DETECTOR FORWARD DUMMY CALLED")
         outs = ()
         # backbone
         x = self.extract_feat(img)
@@ -132,6 +139,24 @@ class TwoStageDetector(BaseDetector):
         if self.with_rpn:
             proposal_cfg = self.train_cfg.get('rpn_proposal',
                                               self.test_cfg.rpn)
+            #print(f"single img shape: {img[:, (5, 15, 25), :, :]}")
+            std = img_metas[0]['img_norm_cfg']['std']
+            mean = img_metas[0]['img_norm_cfg']['mean']
+            debug_channels = (5, 15, 25)
+            mean_tensor = torch.tensor([mean[c] for c in debug_channels],
+                                       device=img.device,
+                                       dtype=img.dtype).view(1, 3, 1, 1)
+            std_tensor = torch.tensor([std[c] for c in debug_channels],
+                                      device=img.device,
+                                      dtype=img.dtype).view(1, 3, 1, 1)
+            debug_img = img[:, debug_channels, :, :].to(torch.float32)
+            debug_img = debug_img * std_tensor + mean_tensor
+            debug_img = debug_img - debug_img.amin(dim=(2, 3), keepdim=True)
+            debug_img = debug_img / (debug_img.amax(dim=(2, 3), keepdim=True) + 1e-6)
+            debug_img = debug_img * 255.0
+            self.debug_imgs = tensor2imgs(debug_img, mean=None, std=None, to_rgb=False)
+            #print(f"len(self.debug_imgs): {len(self.debug_imgs)}")
+
             rpn_losses, proposal_list = self.rpn_head.forward_train(
                 x,
                 img_metas,
@@ -143,6 +168,14 @@ class TwoStageDetector(BaseDetector):
             losses.update(rpn_losses)
         else:
             proposal_list = proposals
+
+        if self.debug_imgs is not None:
+            # print(f"img_metas: {(len(img_metas))}, proposal_list[0]: {img_metas}")
+            for idx, (img, bboxes, gt) in enumerate(zip(self.debug_imgs, proposal_list, gt_bboxes)):
+                img = imshow_bboxes(img, gt.cpu().numpy(), show=False, colors='red')
+                #epoch = len(glob(f'./debug_vis/consine_config/{img_metas[idx]["ori_filename"].replace(".npy", "")}_*.png'))
+                img = imshow_bboxes(img, bboxes.cpu().numpy(), show=False)
+                #imwrite(cv2.resize(img, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA), f'./debug_vis/consine_config/{img_metas[idx]["ori_filename"].replace(".npy", "")}_{epoch}.png')
 
         roi_losses = self.roi_head.forward_train(x, img_metas, proposal_list,
                                                  gt_bboxes, gt_labels,
@@ -172,16 +205,17 @@ class TwoStageDetector(BaseDetector):
 
     def simple_test(self, img, img_metas, proposals=None, rescale=False):
         """Test without augmentation."""
-
+        #print("TWO STAGE DETECTOR SIMPLE TEST CALLED")
         assert self.with_bbox, 'Bbox head must be implemented.'
         x = self.extract_feat(img)
         if proposals is None:
             proposal_list = self.rpn_head.simple_test_rpn(x, img_metas)
+            #print("\nProposal: ", proposal_list)
         else:
             proposal_list = proposals
-
-        return self.roi_head.simple_test(
+        ret = self.roi_head.simple_test(
             x, proposal_list, img_metas, rescale=rescale)
+        return ret
 
     def aug_test(self, imgs, img_metas, rescale=False):
         """Test with augmentations.
@@ -189,6 +223,7 @@ class TwoStageDetector(BaseDetector):
         If rescale is False, then returned bboxes and masks will fit the scale
         of imgs[0].
         """
+        #print("TWO STAGE DETECTOR AUG TEST CALLED")
         x = self.extract_feats(imgs)
         proposal_list = self.rpn_head.aug_test_rpn(x, img_metas)
         return self.roi_head.aug_test(

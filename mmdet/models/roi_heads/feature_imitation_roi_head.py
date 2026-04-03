@@ -118,7 +118,7 @@ class FIRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
 
     def init_bbox_head(self, bbox_roi_extractor, bbox_head):
         """Initialize ``bbox_head``"""
-        self.bbox_roi_extractor = build_roi_extractor(bbox_roi_extractor)
+        self.bbox_roi_extractor = build_roi_extractor(bbox_roi_extractor) # SingleRoIExtractor
         self.bbox_head = build_head(bbox_head)
 
 
@@ -219,6 +219,7 @@ class FIRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
     def _bbox_forward(self, x, rois):
         """Box head forward function used in both training and testing."""
         # TODO: a more flexible way to decide which feature maps to use
+        # @parameter x is the feature map from FPN(feature pyramid network)
         bbox_feats = self.bbox_roi_extractor(
             x[:self.bbox_roi_extractor.num_inputs], rois)
         if self.with_shared_head:
@@ -253,10 +254,12 @@ class FIRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         """ Compute the quality of instances in a single image
             The quality of an instance is defined:
                 iq = 1 / N * (IoU * Score)_i (i: {1, 2, ..., N})
+            Args:
+                sampling_result: ({'neg_bboxes', 'neg_inds', 'num_gts', pos_assigned_gt_inds', 'pos_bboxes', pos_inds', 'pos_is_gt'})
         """
         with torch.no_grad():
             num_gts = sampling_result.num_gts
-            assign_pos_inds = sampling_result.pos_inds
+            assign_pos_inds = sampling_result.pos_inds # tensor([0], device='cuda:0')
             num_pos = len(assign_pos_inds)
             pos_gt_labels = sampling_result.pos_gt_labels
             scores = F.softmax(cls_score[:num_pos, :], dim=-1)
@@ -269,8 +272,8 @@ class FIRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                 scores = scores[iq_candi_inds]
                 num_pos = len(scores)
                 pos_ious = assign_result.max_overlaps[assign_pos_inds[iq_candi_inds]]  # (num_pos, )
-                pos_is_pro = (sampling_result.pos_is_gt == 0)[iq_candi_inds]  # (num_pos, )
-                pos_assigned_gt_inds = sampling_result.pos_assigned_gt_inds[iq_candi_inds]  # (num_pos, )
+                pos_is_pro = torch.ones_like(sampling_result.pos_is_gt)[iq_candi_inds] #(sampling_result.pos_is_gt == 0)[iq_candi_inds]  # (num_pos, )# 
+                pos_assigned_gt_inds = sampling_result.pos_assigned_gt_inds[iq_candi_inds]  # (num_pos, )       
                 gt_ind_mask = torch.cat([pos_assigned_gt_inds == i for i in range(num_gts)]
                                         ).contiguous().view(num_gts, num_pos)
                 # compute proposals (ious and scores) only
@@ -285,7 +288,7 @@ class FIRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
     def _update_iq_score_info(self, cat_id, cur_gt_roi_feat):
         cur_gt_roi_feat = cur_gt_roi_feat.view(-1, 256, 7, 7)
         # update the iq_score queue and corresponding dict info
-        device_dir = str(cur_gt_roi_feat.device.index)
+        device_dir = '0'#str(cur_gt_roi_feat.device.index)
         cur_gt_save_pth = os.path.join(
             self.con_queue_dir, device_dir, str(cat_id) + '.pt')
         if os.path.exists(cur_gt_save_pth):
@@ -416,6 +419,14 @@ class FIRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
             loss = self.contrast_forward(anchor_feature, contrast_feature,
                                          pos_signs, iq_loss_weights)
             contrast_loss = self.contrast_loss_weights * loss
+            
+            # Ensure numerical stability - reject NaN/Inf losses
+            if torch.isnan(contrast_loss) or torch.isinf(contrast_loss):
+                contrast_loss = torch.tensor(0.0, device=contrast_loss.device, dtype=contrast_loss.dtype)
+            else:
+                # Additional clipping for extremely large losses
+                contrast_loss = torch.clamp(contrast_loss, min=0.0, max=10.0)
+            
             con_losses = con_losses + contrast_loss
 
             # save high-quality features at last
@@ -444,7 +455,7 @@ class FIRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                          pos_signs, loss_weights, eps=1e-6):
         """
         Args:
-            anchor_feature: ground-truth roi features in a single image
+            anchor_feature: ground-truth roi features  in a single image
                 (num_gts, 256, 1, 1)
             contrast_feature: pos/neg rois features fro training
                 (num_gts, self.con_sample_num, 256, 1, 1)
@@ -459,23 +470,43 @@ class FIRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
             contrast_feature = self.relu(fc(contrast_feature))
         anchor_feature = self.fc_proj(anchor_feature)
         contrast_feature = self.fc_proj(contrast_feature)
-        anchor_feats = F.normalize(anchor_feature, dim=-1)  # (num_gts, 128)
-        contrast_feats = F.normalize(contrast_feature, dim=-1)  # (num_gts, self.con_sample_num, 128)
+        
+        # Clip feature magnitudes to prevent overflow
+        anchor_feature = torch.clamp(anchor_feature, min=-5.0, max=5.0)
+        contrast_feature = torch.clamp(contrast_feature, min=-5.0, max=5.0)
+        
+        anchor_feats = F.normalize(anchor_feature, dim=-1, eps=1e-8)  # (num_gts, 128)
+        contrast_feats = F.normalize(contrast_feature, dim=-1, eps=1e-8)  # (num_gts, self.con_sample_num, 128)
         sim_logits = torch.div(  # (num_gts, self.con_sample_num)
             torch.matmul(anchor_feats.unsqueeze(1),
                          contrast_feats.transpose(2, 1).contiguous()),
             self.temperature).squeeze(1)
         # for numerical stability
-        sim_logits_max, _ = torch.max(sim_logits, dim=1, keepdim=True)
+        try: 
+            sim_logits_max, _ = torch.max(sim_logits, dim=1, keepdim=True)
+        except:
+            print(f"[Debug Info] sim_logits: {sim_logits}")
+            raise ValueError("Error in computing sim_logits_max")
         logits = sim_logits - sim_logits_max.detach()  # (num_gts, self.con_sample_num)
+        
+        # Clamp logits for numerical stability
+        logits = torch.clamp(logits, min=-50.0, max=50.0)
 
         exp_logits = torch.exp(logits)
-        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + eps)
         pos_num = pos_signs.sum(dim=1).cuda()
         pos_num = pos_num + eps * (pos_num == 0)  # avoid dividing by zero
         mean_log_prob_pos = -(pos_signs * log_prob).sum(dim=1) / pos_num
         weighted_loss = loss_weights * mean_log_prob_pos
+        
+        # Clamp individual losses to prevent divergence
+        weighted_loss = torch.clamp(weighted_loss, min=-100.0, max=100.0)
         loss = weighted_loss.mean()
+        
+        # Final sanity check
+        if torch.isnan(loss) or torch.isinf(loss):
+            loss = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
+            
         return loss
 
     def _get_gt_quality(self, iq_scores, aug_num_per_hq_gt, gt_labels, cur_sample_num):

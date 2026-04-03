@@ -1,4 +1,4 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+                                                           # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import division
 import copy
 import warnings
@@ -414,6 +414,7 @@ class StageRefineRPNHead(RPNHead):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
+        # Having scale of 4, N=2samples per batch #print(f'pred_bbox[{len(bbox_preds)}]: {bbox_preds[0].shape}, gt_bbox[{len(gt_bboxes)}]: {gt_bboxes[0].shape}')
         featmap_sizes = [featmap.size()[-2:] for featmap in bbox_preds]
         label_channels = self.cls_out_channels if self.use_sigmoid_cls else 1
         cls_reg_targets = self.get_targets(
@@ -456,6 +457,7 @@ class StageRefineRPNHead(RPNHead):
             bbox_targets_list,
             bbox_weights_list,
             num_total_samples=num_total_samples)
+        #print(f"RPN_losses_cls:{losses[0]}, RPN_losses_reg:{losses[1]}")
         if self.with_cls:
             return dict(loss_rpn_cls=losses[0], loss_rpn_reg=losses[1])
         return dict(loss_rpn_reg=losses[1])
@@ -747,6 +749,7 @@ class CRPNHead(BaseDenseHead, BBoxTestMixin):
             stage_loss = stage.loss(*rpn_loss_inputs)
             for name, value in stage_loss.items():
                 losses['s{}.{}'.format(i, name)] = value
+                #print(f"Stage{i} loss_{name}: {value}")
 
             # refine boxes
             if i < self.num_stages - 1:
@@ -761,11 +764,11 @@ class CRPNHead(BaseDenseHead, BBoxTestMixin):
             return losses, proposal_list
 
     def loss(self):
-        """loss() is implemented in StageCascadeRPNHead."""
+        """loss() is implemented in StageRefineRPNHead."""
         pass
 
     def get_bboxes(self):
-        """get_bboxes() is implemented in StageCascadeRPNHead."""
+        """get_bboxes() is implemented in StageRefineRPNHead."""
         pass
 
     def simple_test_rpn(self, x, img_metas):
