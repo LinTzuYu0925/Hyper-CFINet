@@ -1,0 +1,35 @@
+FROM python:3.8-slim
+
+LABEL org.opencontainers.image.title="HyperCFINet runtime"
+LABEL org.opencontainers.image.description="Docker image built from HyperCFINet requirements"
+
+WORKDIR /workspace
+
+# System packages required by git dependencies and some Python build steps.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends git build-essential \
+	&& rm -rf /var/lib/apt/lists/*
+
+# Keep versions aligned with the project README defaults.
+ARG TORCH_VERSION=1.10.0+cu113
+ARG TORCHVISION_VERSION=0.11.0+cu113
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu113
+ARG MMCV_FULL_VERSION=1.5.0
+ARG MMCV_FIND_LINKS=https://download.openmmlab.com/mmcv-full/dist/cu113/torch1.10.0/index.html
+
+# `requirements/tests.txt` contains `sklearn` alias package.
+ENV SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL=True
+
+# Copy the requirements root file and nested requirements directory.
+COPY requirements.txt /tmp/requirements.txt
+COPY requirements/ /tmp/requirements/
+
+# Install dependencies in the same order used by the README.
+RUN python -m pip install --no-cache-dir --upgrade pip \
+	&& python -m pip install --no-cache-dir \
+		torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} --index-url ${TORCH_INDEX_URL} \
+	&& python -m pip install --no-cache-dir -U openmim \
+	&& mim install mmcv-full==${MMCV_FULL_VERSION} -f ${MMCV_FIND_LINKS} \
+	&& python -m pip install --no-cache-dir -r /tmp/requirements.txt
+
+CMD ["bash"]
